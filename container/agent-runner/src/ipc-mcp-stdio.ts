@@ -333,6 +333,64 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
+// X (Twitter) tools — write IPC tasks for host-side browser automation
+const X_RESULTS_DIR = path.join(IPC_DIR, 'x_results');
+
+async function waitForXResult(requestId: string, maxWait = 60000): Promise<{ success: boolean; message: string }> {
+  const resultFile = path.join(X_RESULTS_DIR, `${requestId}.json`);
+  const pollInterval = 1000;
+  let elapsed = 0;
+  while (elapsed < maxWait) {
+    if (fs.existsSync(resultFile)) {
+      try {
+        const result = JSON.parse(fs.readFileSync(resultFile, 'utf-8'));
+        fs.unlinkSync(resultFile);
+        return result;
+      } catch (err) {
+        return { success: false, message: `Failed to read result: ${err}` };
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
+    elapsed += pollInterval;
+  }
+  return { success: false, message: 'Request timed out' };
+}
+
+async function xToolHandler(type: string, args: Record<string, string>) {
+  if (!isMain) {
+    return { content: [{ type: 'text' as const, text: 'Only the main group can use X tools.' }], isError: true };
+  }
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  writeIpcFile(TASKS_DIR, { type, ...args, requestId, groupFolder, timestamp: new Date().toISOString() });
+  const result = await waitForXResult(requestId);
+  return { content: [{ type: 'text' as const, text: result.message }], isError: !result.success };
+}
+
+server.tool('x_post', 'Post a tweet to X (Twitter). Main group only.',
+  { content: z.string().max(280).describe('Tweet content (max 280 chars)') },
+  async (args) => xToolHandler('x_post', { content: args.content }),
+);
+
+server.tool('x_like', 'Like a tweet on X.',
+  { tweet_url: z.string().describe('URL of the tweet to like') },
+  async (args) => xToolHandler('x_like', { tweetUrl: args.tweet_url }),
+);
+
+server.tool('x_reply', 'Reply to a tweet on X.',
+  { tweet_url: z.string().describe('URL of the tweet to reply to'), content: z.string().max(280).describe('Reply content') },
+  async (args) => xToolHandler('x_reply', { tweetUrl: args.tweet_url, content: args.content }),
+);
+
+server.tool('x_retweet', 'Retweet a tweet on X.',
+  { tweet_url: z.string().describe('URL of the tweet to retweet') },
+  async (args) => xToolHandler('x_retweet', { tweetUrl: args.tweet_url }),
+);
+
+server.tool('x_quote', 'Quote tweet on X.',
+  { tweet_url: z.string().describe('URL of the tweet to quote'), content: z.string().max(280).describe('Quote comment') },
+  async (args) => xToolHandler('x_quote', { tweetUrl: args.tweet_url, content: args.content }),
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);
